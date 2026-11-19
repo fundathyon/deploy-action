@@ -1,0 +1,25 @@
+# Copy this file to .github/workflows/foundathyon.yml in your repository.
+# Before: create the repository secret FOUNDATHYON_REGISTRY_TOKEN with the fdr_... token from the panel.
+name: Foundathyon Deploy
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: foundathyon-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: fundathyon/deploy-action@v1
+        with:
+          organization: your-org-slug
+          service: your-service-slug
+          token: ${{ secrets.FOUNDATHYON_REGISTRY_TOKEN }}

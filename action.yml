@@ -1,0 +1,150 @@
+name: Foundathyon Deploy
+description: Build your Docker image and push it to the Foundathyon registry. The push triggers the deploy.
+author: Foundathyon
+branding:
+  icon: upload-cloud
+  color: blue
+
+inputs:
+  organization:
+    description: Organization slug in Foundathyon. Used as the registry username and as the first part of the image path.
+    required: true
+  service:
+    description: Service slug, as shown in the panel. The app is deployed at https://<service>.<domain>.
+    required: true
+  token:
+    description: Registry token (fdr_...). Store it as the repository secret FOUNDATHYON_REGISTRY_TOKEN and pass it with secrets.FOUNDATHYON_REGISTRY_TOKEN.
+    required: true
+  registry:
+    description: Registry host, without scheme and without trailing slash.
+    required: false
+    default: registry.foundathyon.dev
+  context:
+    description: Docker build context, relative to the repository root.
+    required: false
+    default: "."
+  dockerfile:
+    description: Path to the Dockerfile, relative to the build context.
+    required: false
+    default: Dockerfile
+  build-args:
+    description: Build arguments, one KEY=value per line.
+    required: false
+    default: ""
+  target:
+    description: Target stage of a multi-stage Dockerfile. Empty builds the last stage.
+    required: false
+    default: ""
+  domain:
+    description: Base domain where apps are published. Only used to print the expected URL in the job summary.
+    required: false
+    default: foundathyon.dev
+  setup-buildx:
+    description: Set to "false" if the job already configured Docker Buildx (for example an insecure registry in tests).
+    required: false
+    default: "true"
+
+outputs:
+  image:
+    description: Full image reference including the digest (registry/org/service@sha256:...).
+    value: ${{ steps.meta.outputs.repository }}@${{ steps.build.outputs.digest }}
+  digest:
+    description: Digest of the pushed manifest (sha256:...).
+    value: ${{ steps.build.outputs.digest }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate inputs
+      id: meta
+      shell: bash
+      env:
+        IN_ORG: ${{ inputs.organization }}
+        IN_SERVICE: ${{ inputs.service }}
+        IN_TOKEN: ${{ inputs.token }}
+        IN_REGISTRY: ${{ inputs.registry }}
+        IN_CONTEXT: ${{ inputs.context }}
+        IN_DOCKERFILE: ${{ inputs.dockerfile }}
+      run: |
+        fail() { echo "::error title=Foundathyon Deploy::$1"; exit 1; }
+        # Same rule as the platform (^[a-z0-9](?:[a-z0-9-]{1,30}[a-z0-9])$), written as POSIX ERE.
+        slug_re='^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$'
+
+        [[ "$IN_ORG" =~ $slug_re ]] || fail "Input 'organization' (\"$IN_ORG\") is not a valid slug. Use 3-32 characters: lowercase letters, digits and hyphens, starting and ending with a letter or digit. Copy it from the Foundathyon panel."
+        [[ "$IN_SERVICE" =~ $slug_re ]] || fail "Input 'service' (\"$IN_SERVICE\") is not a valid slug. Use 3-32 characters: lowercase letters, digits and hyphens, starting and ending with a letter or digit. Copy it from the Foundathyon panel."
+
+        if [ -z "$IN_TOKEN" ]; then
+          fail "Input 'token' is empty. Create the repository secret FOUNDATHYON_REGISTRY_TOKEN (Settings > Secrets and variables > Actions) with the fdr_... token from the Foundathyon panel and pass it in the 'token' input using the secrets context (secrets.FOUNDATHYON_REGISTRY_TOKEN). Secrets are not available to workflows triggered from forks."
+        fi
+        echo "::add-mask::$IN_TOKEN"
+
+        if [ -z "$IN_REGISTRY" ] || [[ "$IN_REGISTRY" == *"://"* ]] || [[ "$IN_REGISTRY" == */* ]]; then
+          fail "Input 'registry' (\"$IN_REGISTRY\") must be a host (optionally with port), without scheme and without slashes. Example: registry.foundathyon.dev"
+        fi
+
+        df="$IN_CONTEXT/$IN_DOCKERFILE"
+        if [ ! -f "$df" ]; then
+          fail "Dockerfile not found at '$df'. The 'dockerfile' input is relative to 'context' ('$IN_CONTEXT'). Did you forget actions/checkout before this step, or is the file named differently? Starter Dockerfiles: https://github.com/fundathyon/deploy-action/tree/v1/templates"
+        fi
+
+        repository="$IN_REGISTRY/$IN_ORG/$IN_SERVICE"
+        {
+          echo "repository=$repository"
+          echo "dockerfile=$df"
+        } >> "$GITHUB_OUTPUT"
+
+    # Third-party actions are pinned to a major version (movable tag) to receive
+    # fixes without editing this file. Trade-off: pinning to a commit SHA is stricter
+    # against supply-chain attacks; revisit before v1 is widely adopted.
+    - name: Set up Docker Buildx
+      if: inputs.setup-buildx != 'false'
+      uses: docker/setup-buildx-action@v3 # major v3
+
+    - name: Log in to the Foundathyon registry
+      uses: docker/login-action@v3 # major v3
+      with:
+        registry: ${{ inputs.registry }}
+        username: ${{ inputs.organization }}
+        password: ${{ inputs.token }}
+
+    # One single manifest per push: linux/amd64 only, no provenance and no SBOM
+    # attestations (they would be pushed as extra manifests and confuse the deploy trigger).
+    # The tag is only the commit SHA: github.ref_name may contain "/" and be an invalid tag.
+    - name: Build and push
+      id: build
+      uses: docker/build-push-action@v6 # major v6
+      with:
+        context: ${{ inputs.context }}
+        file: ${{ steps.meta.outputs.dockerfile }}
+        target: ${{ inputs.target }}
+        build-args: ${{ inputs.build-args }}
+        platforms: linux/amd64
+        push: true
+        provenance: false
+        sbom: false
+        tags: ${{ steps.meta.outputs.repository }}:${{ github.sha }}
+        labels: org.opencontainers.image.revision=${{ github.sha }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Job summary
+      shell: bash
+      env:
+        IMAGE: ${{ steps.meta.outputs.repository }}:${{ github.sha }}
+        DIGEST: ${{ steps.build.outputs.digest }}
+        SERVICE: ${{ inputs.service }}
+        DOMAIN: ${{ inputs.domain }}
+      run: |
+        {
+          echo "### Foundathyon Deploy"
+          echo ""
+          echo "Image pushed. The registry notifies the platform and the deploy starts on its own."
+          echo ""
+          echo "| | |"
+          echo "|---|---|"
+          echo "| Image | \`$IMAGE\` |"
+          echo "| Digest | \`$DIGEST\` |"
+          echo "| Expected URL | https://$SERVICE.$DOMAIN |"
+          echo ""
+          echo "Follow the deploy status and logs in the Foundathyon panel."
+        } >> "$GITHUB_STEP_SUMMARY"

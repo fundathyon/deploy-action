@@ -1,0 +1,115 @@
+name: Test action
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  push-to-local-registry:
+    runs-on: ubuntu-latest
+    services:
+      registry:
+        image: registry:3
+        ports:
+          - 5000:5000
+    steps:
+      - uses: actions/checkout@v4
+
+      # Buildx must be able to push over plain HTTP to localhost:5000, so it is
+      # configured here and the action is told not to set it up again.
+      - uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: network=host
+          buildkitd-config-inline: |
+            [registry."localhost:5000"]
+              http = true
+              insecure = true
+
+      - name: Missing token fails with a clear message
+        id: no_token
+        continue-on-error: true
+        uses: ./
+        with:
+          organization: test-org
+          service: test-svc
+          token: ""
+          registry: localhost:5000
+          context: templates/static/example
+          dockerfile: ../Dockerfile
+          setup-buildx: "false"
+
+      - name: Missing Dockerfile fails
+        id: no_dockerfile
+        continue-on-error: true
+        uses: ./
+        with:
+          organization: test-org
+          service: test-svc
+          token: dummy
+          registry: localhost:5000
+          context: templates/static/example
+          dockerfile: does-not-exist
+          setup-buildx: "false"
+
+      - name: Invalid slug fails
+        id: bad_slug
+        continue-on-error: true
+        uses: ./
+        with:
+          organization: Bad_Org
+          service: test-svc
+          token: dummy
+          registry: localhost:5000
+          setup-buildx: "false"
+
+      - name: Negative cases really failed
+        run: |
+          test "${{ steps.no_token.outcome }}" = failure
+          test "${{ steps.no_dockerfile.outcome }}" = failure
+          test "${{ steps.bad_slug.outcome }}" = failure
+
+      - name: Run the action
+        id: deploy
+        uses: ./
+        with:
+          organization: test-org
+          service: test-svc
+          token: dummy-token # registry:3 without auth accepts any login
+          registry: localhost:5000
+          context: templates/static/example
+          dockerfile: ../Dockerfile
+          setup-buildx: "false"
+
+      - name: Verify tag and single manifest
+        env:
+          SHA: ${{ github.sha }}
+          DIGEST: ${{ steps.deploy.outputs.digest }}
+          IMAGE: ${{ steps.deploy.outputs.image }}
+        run: |
+          set -euo pipefail
+          base=http://localhost:5000/v2/test-org/test-svc
+          echo "image=$IMAGE digest=$DIGEST"
+
+          tags=$(curl -fsS "$base/tags/list" | jq -c '.tags | sort')
+          echo "tags=$tags"
+          test "$tags" = "[\"$SHA\"]"
+
+          accept='application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json'
+          curl -fsS -D headers.txt -o manifest.json -H "Accept: $accept" "$base/manifests/$SHA"
+          cat manifest.json
+          ctype=$(grep -i '^content-type:' headers.txt | tr -d '\r' | awk '{print tolower($2)}')
+          echo "content-type=$ctype"
+          case "$ctype" in
+            *image.index*|*manifest.list*) echo "::error::manifest is an index"; exit 1 ;;
+          esac
+          jq -e 'has("manifests") | not' manifest.json
+          test "$(grep -i '^docker-content-digest:' headers.txt | tr -d '\r' | awk '{print $2}')" = "$DIGEST"
+          test "$IMAGE" = "localhost:5000/test-org/test-svc@$DIGEST"
+
+          # The revision label lives in the image config.
+          cfg=$(jq -r '.config.digest' manifest.json)
+          curl -fsS "$base/blobs/$cfg" | jq -e --arg sha "$SHA" '.config.Labels["org.opencontainers.image.revision"] == $sha'
