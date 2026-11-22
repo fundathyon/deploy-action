@@ -83,6 +83,7 @@ jobs:
           context: templates/static/example
           dockerfile: ../Dockerfile
           setup-buildx: "false"
+          url: https://test-svc-z4kz57gp.foundathyon.dev
 
       - name: Verify tag and single manifest
         env:
