@@ -10,7 +10,7 @@ inputs:
     description: Organization slug in Foundathyon. Used as the registry username and as the first part of the image path.
     required: true
   service:
-    description: Service slug, as shown in the panel. The app is deployed at https://<service>.<domain>.
+    description: Image name in the registry (the second part of the image path), as the panel's workflow sets it. It is not always the app's subdomain.
     required: true
   token:
     description: Registry token (fdr_...). Store it as the repository secret FOUNDATHYON_REGISTRY_TOKEN and pass it with secrets.FOUNDATHYON_REGISTRY_TOKEN.
@@ -35,8 +35,12 @@ inputs:
     description: Target stage of a multi-stage Dockerfile. Empty builds the last stage.
     required: false
     default: ""
+  url:
+    description: The app's URL, as the panel shows it (https://<subdomain>.<domain>). Only used in the job summary. Without it the summary points to the panel instead of guessing.
+    required: false
+    default: ""
   domain:
-    description: Base domain where apps are published. Only used to print the expected URL in the job summary.
+    description: Deprecated and unused. The URL can't be derived from the image name (services get a subdomain with a random suffix); use `url`. Kept so existing workflows don't warn.
     required: false
     default: foundathyon.dev
   setup-buildx:
@@ -132,9 +136,16 @@ runs:
       env:
         IMAGE: ${{ steps.meta.outputs.repository }}:${{ github.sha }}
         DIGEST: ${{ steps.build.outputs.digest }}
-        SERVICE: ${{ inputs.service }}
-        DOMAIN: ${{ inputs.domain }}
+        APP_URL: ${{ inputs.url }}
       run: |
+        # Only a plain https URL goes to the summary (it is Markdown).
+        url_re='^https://[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]+)?/?$'
+        if [[ "$APP_URL" =~ $url_re ]]; then
+          url_row="| URL | $APP_URL |"
+        else
+          [ -n "$APP_URL" ] && echo "::warning title=Foundathyon Deploy::Input 'url' is not an https URL of a host; it is left out of the summary."
+          url_row="| URL | Shown in the Foundathyon panel, in the service's Overview |"
+        fi
         {
           echo "### Foundathyon Deploy"
           echo ""
@@ -144,7 +155,7 @@ runs:
           echo "|---|---|"
           echo "| Image | \`$IMAGE\` |"
           echo "| Digest | \`$DIGEST\` |"
-          echo "| Expected URL | https://$SERVICE.$DOMAIN |"
+          echo "$url_row"
           echo ""
           echo "Follow the deploy status and logs in the Foundathyon panel."
         } >> "$GITHUB_STEP_SUMMARY"

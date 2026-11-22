@@ -1,6 +1,6 @@
 # Foundathyon Deploy Action
 
-Acción de GitHub reutilizable que construye la imagen Docker de tu repositorio y la sube al registry de Foundathyon. Esa subida es lo que dispara el deploy: el registry avisa a la plataforma y tu app queda en `https://<servicio>.foundathyon.dev`.
+Acción de GitHub reutilizable que construye la imagen Docker de tu repositorio y la sube al registry de Foundathyon. Esa subida es lo que dispara el deploy: el registry avisa a la plataforma y tu app queda en la URL que muestra el panel (`https://<subdominio>.foundathyon.dev`).
 
 > English version below: [English](#english).
 
@@ -43,14 +43,15 @@ Cada push a `main` construye y sube `registry.foundathyon.dev/<organization>/<se
 | Input | Obligatorio | Por defecto | Descripción |
 |---|---|---|---|
 | `organization` | sí | | Slug de la organización. Es el usuario del registry y la primera parte de la ruta de la imagen. |
-| `service` | sí | | Slug del servicio. Debe coincidir con el del panel. |
+| `service` | sí | | Nombre de la imagen en el registry (segunda parte de la ruta). Cópialo del workflow que da el panel: no siempre es el subdominio de la app. |
 | `token` | sí | | Token `fdr_...`. Pásalo con `${{ secrets.FOUNDATHYON_REGISTRY_TOKEN }}`. |
 | `registry` | no | `registry.foundathyon.dev` | Host del registry, sin esquema ni barras. |
 | `context` | no | `.` | Contexto de build, relativo a la raíz del repo. |
 | `dockerfile` | no | `Dockerfile` | Ruta del Dockerfile **relativa al `context`**. |
 | `build-args` | no | vacío | `CLAVE=valor`, uno por línea. |
 | `target` | no | vacío | Stage de un Dockerfile multi-stage. |
-| `domain` | no | `foundathyon.dev` | Dominio base; solo se usa para escribir la URL esperada en el resumen. |
+| `url` | no | vacío | URL de la app, como la muestra el panel. Solo se usa en el resumen del job; sin ella, el resumen remite al panel. |
+| `domain` | no | `foundathyon.dev` | Obsoleto, no se usa: la URL no se puede deducir del nombre de la imagen (el subdominio lleva un sufijo aleatorio). Usa `url`. |
 | `setup-buildx` | no | `true` | Pon `"false"` si tu job ya configuró Buildx (lo usa la prueba con registry local sin TLS). |
 
 Los slugs deben cumplir `^[a-z0-9](?:[a-z0-9-]{1,30}[a-z0-9])$` (3 a 32 caracteres: minúsculas, dígitos y guiones; empiezan y terminan en letra o dígito).
@@ -62,7 +63,7 @@ Los slugs deben cumplir `^[a-z0-9](?:[a-z0-9-]{1,30}[a-z0-9])$` (3 a 32 caracter
 | `image` | Referencia completa con digest: `registry.foundathyon.dev/<org>/<servicio>@sha256:...`. |
 | `digest` | Digest del manifiesto subido (`sha256:...`). |
 
-Al terminar, la acción escribe en el resumen del job la imagen, el digest y la URL esperada de la app.
+Al terminar, la acción escribe en el resumen del job la imagen, el digest y la URL de la app (la del input `url`, o un aviso de que está en el panel).
 
 ## Qué hace exactamente
 
@@ -103,7 +104,7 @@ La acción se versiona con tags semver (`v1.0.0`, `v1.1.0`, ...) y un tag móvil
 
 ## English
 
-Reusable GitHub Action that builds your repository's Docker image and pushes it to the Foundathyon registry. The push is what triggers the deploy: the registry notifies the platform and your app goes live at `https://<service>.foundathyon.dev`.
+Reusable GitHub Action that builds your repository's Docker image and pushes it to the Foundathyon registry. The push is what triggers the deploy: the registry notifies the platform and your app goes live at the URL the panel shows (`https://<subdomain>.foundathyon.dev`).
 
 ### Quick start
 
@@ -113,7 +114,7 @@ Reusable GitHub Action that builds your repository's Docker image and pushes it 
 
 ### Inputs and outputs
 
-Inputs: `organization`, `service`, `token` (required); `registry` (default `registry.foundathyon.dev`), `context` (`.`), `dockerfile` (`Dockerfile`, relative to `context`), `build-args` (one `KEY=value` per line), `target`, `domain` (`foundathyon.dev`, only used for the summary URL), `setup-buildx` (`true`).
+Inputs: `organization`, `service`, `token` (required); `registry` (default `registry.foundathyon.dev`), `context` (`.`), `dockerfile` (`Dockerfile`, relative to `context`), `build-args` (one `KEY=value` per line), `target`, `url` (the app's URL as the panel shows it; only used in the job summary), `domain` (deprecated, unused), `setup-buildx` (`true`).
 
 Outputs: `image` (reference with digest) and `digest`.
 
